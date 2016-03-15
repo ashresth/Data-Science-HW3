@@ -1,0 +1,592 @@
+---
+title: 'Homework 3: Is Donald Trump going to win the republican nomination?'
+output: html_document
+---
+
+**This homework is due Tuesday March 8, 2016 at 8PM EST. When complete, submit your code in an R Markdown file and the knitted HTML via GitHub.**
+
+# Motivation
+
+In 2012 Nate Silver, and other data scientists, [predicted the outcome of each state correctly](http://mashable.com/2012/11/07/nate-silver-wins/#2WkAUaXCVaqw). 
+They did this by aggregating data from many polls to create more precise
+estimates than what one single poll can provide.
+
+In this homework, we will try to predict the results of the democratic 
+and republican primaries by studying the performance of polls in 
+elections that already occurred and then aggregating results.
+
+
+# Problem 1 
+
+The first step in our analysis will be to wrangle the data in a way 
+that will simplify the analysis. Ultimately, we want a table of results 
+with each poll represented by a row and including results for each 
+candidate as well as information about the poll such as name and date.
+
+#  Problem 1A
+
+Install and load the `pollstR` package. This package provides functions 
+to access data in the Huffington Post's database. Read the help file 
+for the `pollstr_polls()` function and write a function that reads 
+**all** the polls related to the republican primaries. Name the object 
+`race2016`. Hint: Visit 
+[this webpage](http://elections.huffingtonpost.com/pollster/api) 
+to select the right `topic` and make sure to change the `max_pages` argument. 
+
+```{r, echo=FALSE, cache=TRUE, warning=FALSE, message=FALSE}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(pollstR)
+race2016 <- pollstr_polls(topic = '2016-president-gop-primary', max_pages = Inf)
+```
+
+# Problem 1B
+
+Examine and familiarize yourself with the `race2016` object. Note 
+that the `questions` component has a table with election results. 
+Look at the `topic` component of the `questions` component. Create a new 
+table with only the results from the `2016-president-gop-primary` 
+and only state (or territory) polls, no national polls. Hint: create 
+a new object called `results` with the table of results and 
+use `dplyr`. How many rows are we left with?
+
+```{r, echo=FALSE, cache=TRUE, warning=FALSE, message=FALSE}
+#Examine questions component and states under 2016-president-gop-primary topic
+questions <- race2016$questions
+topic <- filter(race2016$questions, topic =="2016-president-gop-primary")
+#National polls listed as "US"
+```
+
+```{r}
+results <- race2016$questions %>%
+  filter(topic=="2016-president-gop-primary") %>%
+  filter(state != "US")
+cat("We are left with", nrow(results), "rows")
+```
+
+## Problem 1C
+
+In Problem 1B, we created a table called `results` with over 4000 rows. 
+Does this mean that we have data for 4000 polls? How many polls 
+did we actually have? 
+Hint: look at the `id` column and use the `group_by` command.
+
+```{r}
+poll_num <- group_by(results, id)
+paste("We actually have", length(unique(results$id)), "polls")
+```
+
+
+## Problem 1D
+
+Look at the first row of your `results` table. 
+What date was this poll conducted? 
+Hint: Use the `polls` component of the `race2016` object to find the date.
+
+```{r}
+x <- results[1,]$id
+start <- filter(race2016$polls, id==x)$start_date
+end <- filter(race2016$polls, id==x)$end_date
+paste("The poll started on", start, "and ended on", end)
+```
+
+## Problem 1E
+
+Now examine the candidates in the "choices" column included in `results` table. 
+Hint: use the `table()` function. Note that there are several choices that
+not going to be informative. For example, we have candidates that have
+dropped out. We also have entries such as `No one`, `No One` and 
+`No Preference`. Filter the `results` table to include only Rubio and Trump. 
+
+```{r}
+table(results$choice)
+results <- filter(results, choice=="Rubio" | choice =="Trump")
+```
+
+## Problem 1F
+
+In our `results` table, we have one row for each candidate in each poll. 
+Transform the `results` table to have one row for each poll and columns 
+for each Rubio and Trump. Next, create a column called `diff` with the 
+difference between Trump and Rubio. Hint: Remove the `first_name` and 
+`last_name` columns then use the `tidyr` function `spread()`.
+
+```{r}
+results <- results %>%
+  unique %>%
+  select(-first_name, -last_name) %>%
+  spread(key=choice, value=value) %>%
+  mutate(diff = Trump - Rubio)
+#without unique results in error due to duplicated rows (same ID and choice)
+```
+
+
+## Problem 1G 
+
+For each poll in the `results` table, we want to know the start date and the 
+end date of the poll along with the pollster name and the type of poll it was.
+Hint: This information is in the `polls` component of `race2016`. 
+You can select the relevant columns then use the `id` column to join the
+tables. One of the `join` functions in `tidyr` will do the trick.
+
+```{r}
+#in the polls component, the columns we want are id, pollster, start date, end date and method (poll type) which are columns 1 through 5
+polls<-race2016$polls[,1:5]
+#left join to keep all rows in results and only those rows in polls that match in results
+results <- results %>%
+  left_join(polls, by="id")
+```
+
+
+## Problem 1H
+
+Study the type of values in the `pollster` column. Notice that you 
+have many different values but that certain names commonly appear 
+in these values. For example, consider the name "NBC" in the `pollster`
+column. NBC here is the Survey House. Use a join function again to add the survey 
+house to the `results` table. Rename the column `house`. 
+Hint: `race2016$survey_house` has the information you need.
+
+```{r}
+#in the survey houses component, we have the ID and the house information. we do not need the party column.
+house <-race2016$survey_houses %>% select(-party)
+#left join again
+results <- results %>%
+  left_join(house, by="id")
+colnames(results)[colnames(results)=="name"]<-"house"
+```
+
+
+## Problem 2
+
+We now have a table with all the information we need. We will now use 
+the results from Iowa, New Hampshire, Nevada and South Carolina 
+to determine how to create a prediction for upcoming primaries.
+
+## Problem 2A 
+
+Use an internet search to determine the results for the Iowa, 
+New Hampshire, Nevada and South Carolina primaries for the top three
+candidates. Create a table called `actual` with this information. 
+Also, create a column with the actual election difference.
+Use a join function to add this information to our `results` table. 
+
+
+```{r}
+state <- c("IA", "NH", "NV", "SC")
+actual_Cruz <- c(28, 12, 21, 22)
+actual_Trump <- c(24.3, 35.3, 45.9, 32.5)
+actual_Rubio <- c(23.1, 10.6, 23.9, 22.5)
+actual <- data.frame(state, actual_Trump, actual_Rubio, actual_Cruz)
+
+#to use mutate, we need to turn our matrix into a dataframe. we can use mutate to get a column for the actual difference. to use left_join, the class of the state column needs to match. 
+class(actual$state)
+#we can thus change the class to character
+actual <- actual %>%
+  mutate(state= as.character(state)) %>%
+  mutate(actual_diff = actual_Trump-actual_Rubio) 
+
+results <- results %>%
+  left_join(actual, by="state")
+```
+
+## Problem 2B 
+
+Create boxplots of the poll results for Trump in Iowa stratified by 
+the pollster survey house for polls having more than 4 total results. 
+Add a horizontal line with the actual results. 
+Hint: Use the `group_by`, `mutate`, `filter` and `ungroup` functions in 
+`dplyr` for the filtering step.
+
+```{r}
+results %>% 
+  filter(state=="IA") %>%
+  group_by(house) %>% 
+  mutate(num_polls=n()) %>%
+  filter(n()>4) %>% 
+  ungroup %>%
+  filter(!is.na(Trump)) %>%
+  ggplot(aes(house, Trump, fill=house, color=house)) + geom_boxplot() + geom_hline(aes(yintercept=actual_Trump)) +
+  theme(axis.ticks = element_blank(), axis.text.x = element_blank(), plot.title = element_text(size = 9)) +
+  labs(title="Predictions for Trump in Iowa by Pollster Survey House", 
+       x="House", y="Predicted percent for Trump")
+  
+```
+
+## Problem 2C
+
+Using the poll results for Trump in Iowa,
+compute the standard deviation for the results from each pollster house 
+for polls having more than 4 total results. 
+Then, study the typical standard deviation sizes used in 
+these polls. Create a new table with two columns: the observed
+standard deviation and the standard deviations that theory predicts. 
+For the prediction you have several observations. Pick the smallest 
+one. Which is larger, the observed or the theoretical?
+
+```{r}
+#make a function that takes a state and returns the observed and predicted sd
+trump_state <- function(s) {
+  results %>%
+    filter(state==s) %>%
+    select(house, Trump, actual_Trump, observations, end_date) %>%
+    filter(!is.na(Trump)) %>%
+    mutate(Trump = Trump/100, actual_Trump = actual_Trump/100) %>% #to use binomial proportions
+    group_by(house) %>% 
+    filter(n() >4) %>%
+    mutate(predicted_sd = sqrt(mean(Trump)*(1-mean(Trump))/min(observations))) %>% #using smallest observations
+    mutate(observed_sd = sd(Trump)) 
+}
+#show predicted and observed sd for IA
+trump_state("IA")%>% select(house, predicted_sd, observed_sd) %>%unique
+```
+Observed SD is larger than expected SD in all cases.
+
+
+## Problem 2D
+
+Now using the data from Problem 2C, plot the individual values 
+against the time the poll was taken (use the `end_date`). 
+Repeat this for each of the four states. Use color to denote pollster house. 
+Using this plot, explain why the theory does not match the observed results?
+
+```{r}
+plot_trump_state <- function(s){
+  trump_state(s) %>%
+    ggplot(aes(end_date, Trump, col=house)) + geom_point() +
+    geom_hline(aes(yintercept=actual_Trump)) +
+    labs(title=paste("Predictions for Trump in",s,"by Poll End Date and Survey House"), 
+        x="End Date", y="Predicted proportion for Trump") +
+    theme(plot.title = element_text(size = 9))
+}
+plot_trump_state("IA")
+plot_trump_state("NH")
+plot_trump_state("SC")
+
+#plot_trump_state("NV")
+#Nevada does not have survey houses that have conducted over 4 polls
+```
+Theory does not match the observed results because the polls tend to get more accurate once we get closer to the election dates and some houses are more accurate than the others.
+
+## Problem 2E 
+
+Consider the Trump - Rubio difference. For each poll in IA, NH, SC and NV, 
+compute the error between the prediction and actual election results. 
+Use exploratory data analysis to get an idea of how time and pollster 
+impacts accuracy.
+
+```{r}
+states <- c("IA", "NH", "SC", "NV")
+#change percent to proportions to use multinomial distribution
+#compute errors
+trump_rubio <- results %>%
+  filter(state %in% states) %>%
+  mutate(actual_diff = actual_diff/100, predicted_diff = (as.numeric(Trump-Rubio)) /100) %>%
+  mutate(Trump = Trump/100, Rubio = Rubio/100) %>%
+  mutate(actual_Trump = actual_Trump/100, actual_Rubio= actual_Rubio/100) %>%
+  mutate(error = actual_diff - predicted_diff) %>%
+  select(state, observations, house, start_date, Trump, Rubio, predicted_diff,
+         actual_Trump, actual_Rubio, actual_diff, error) 
+#plot for the four states
+plot_trump_rubio <- function(s){
+  trump_rubio %>%
+    filter(state==s & !is.na(predicted_diff)) %>%
+    ggplot(aes(start_date, predicted_diff, col=house)) + geom_point() + 
+    geom_hline(aes(yintercept=actual_diff)) +
+    labs(title=paste("Prediction vs Observed Trump-Rubio difference in", s, "by house"),
+         x="Start Date", y="Predicted Trump-Rubio difference") +
+    theme(plot.title = element_text(size = 12), legend.text= element_text(size=5), 
+          legend.position = "bottom")
+}
+plot_trump_rubio("IA")
+plot_trump_rubio("NH")
+plot_trump_rubio("NV")
+plot_trump_rubio("SC")
+#histograms for the four states
+hist_trump_rubio <- function(s){
+  trump_rubio %>%
+    filter(state==s & !is.na(predicted_diff)) %>%
+    ggplot(aes(error)) + geom_histogram(bins=30) + 
+    labs(title=
+           paste("Histrogram of Errors between observed and predicted Trump-Rubio Difference in", s),
+         x="Error")
+}
+
+hist_trump_rubio("IA")
+hist_trump_rubio("NH")
+hist_trump_rubio("NV")
+hist_trump_rubio("SC")
+#errors don't look normally distributed or centered around 0
+
+#check election dates for the states
+ia_elec <- "2016-02-01"
+nh_elec <- "2016-02-09"
+sc_elec <- "2016-02-20"
+nv_elec <- "2016-02-23"
+
+#compute the days before and weeks before election for each state
+trump_rubio <- trump_rubio %>%
+  mutate(poll_date = ifelse(state== "IA", ia_elec, 
+                                         ifelse(state=="NH", nh_elec,
+                                                ifelse(state=="SC", sc_elec, nv_elec))),
+         poll_date = as.Date(poll_date),
+         days_before = poll_date - start_date,
+         weeks_before = as.numeric(floor(days_before/7))) %>%
+  group_by(house) %>%
+  filter(n()>4)
+#fit linear regression
+fit <- lm(predicted_diff ~ weeks_before + house, data=trump_rubio)
+#anova summary
+summary( aov(fit) )
+summary(fit)
+hist(resid(fit), breaks = 15, 
+     main = "Histogram of Residuals after adjusting for week and house effect", cex.main=0.8,
+     ylab = "Residuals")
+qqnorm(resid(fit))
+qqline(resid(fit))
+```
+Both time and survey house have statistically significant effect. If we adjust for the week and house effect, the errors are normally distributed and are centered at 0.
+
+# Problem 2F
+
+For polls from IA, NH, and SC, aggregate all polls from within 1 week of the 
+election (use the `start_date` to determine cutoff) to provide a 
+95% confidence interval for the difference between Trump and Rubio. 
+Compare the following two approaches: 
+(1) the method that assumes that all variance comes from sampling error 
+and (2) the approach that estimates variance empirically. 
+
+```{r}
+#method 1 uses theoretical variance and method 2 uses empirical variance
+#compute theoretical sd under assumtion that proportion of rubio and trump are a part of the same multinomial distribution
+trump_rubio_ci <- trump_rubio %>%
+  filter(state != "NV") %>%
+  filter(days_before <= 7) %>%
+  group_by(state) %>%
+  mutate(thr_sd = sqrt((mean(Trump)*(1-mean(Trump))/min(observations)) + 
+                         (mean(Rubio)*(1-mean(Rubio))/min(observations)) +
+                         2*(mean(Trump)*mean(Rubio)/min(observations)))) %>%
+  mutate(emp_sd = sd(predicted_diff)) %>%
+  mutate(ci_method1_lower = mean(predicted_diff) - 1.96*thr_sd, 
+         ci_method1_upper = mean(predicted_diff) + 1.96*thr_sd,
+         ci_method2_lower = mean(predicted_diff) - 1.96*emp_sd, 
+         ci_method2_upper = mean(predicted_diff) + 1.96*emp_sd) 
+trump_rubio_ci %>%
+  select(state, thr_sd, emp_sd, ci_method1_lower:ci_method2_upper) %>%
+  unique
+```
+
+
+# Problem 3
+
+Before seeing any polls my _prior belief_ is that Rubio will beat 
+Trump in Florida. If I were to quantify this belief I would say that 
+the distribution of the `Trump` - `Rubio` was normal with mean 
+$\mu=-20$ percent and standard deviation $\tau=10$. 
+Let's call the difference $\theta$. Then 
+
+$$
+\theta \sim N( \mu, \tau)
+$$
+
+# Problem 3A
+
+Under my prior belief, what is the chance that Trump would beat Rubio in Florida.
+
+```{r}
+mu = -20
+tau = 10
+prior_ch <-1 - pnorm(0, mean = mu, sd = tau)
+paste("Under my prior belief, the chance that Trump would beat Rubio in Florida is", round(prior_ch, 3))
+```
+
+# Problem 3B
+
+Consider the latest 25 Florida polls. Assume the poll results for the 
+difference are normal distributed with mean $\theta$ and standard 
+deviation $\sigma$. Provide an estimate for $\theta$ and an estimate 
+of the standard deviation $\sigma$.
+
+```{r}
+trump_rubio_fl <- results %>%
+  filter(state=="FL") %>%
+  mutate(predicted_diff = (as.numeric(Trump-Rubio))) %>%
+  mutate(Trump = Trump, Rubio = Rubio) %>%
+  select(state, observations, house, end_date, Trump, Rubio, predicted_diff) %>%
+  arrange(desc(end_date))
+#pick the latest 25
+trump_rubio_fl <- trump_rubio_fl[1:25, ] %>%
+  filter(!is.na(predicted_diff))
+theta_hat <- mean(trump_rubio_fl$predicted_diff)
+sigma_hat <- sd(trump_rubio_fl$predicted_diff)
+paste("The estimated theta is", round(theta_hat, 3), "and the estimated sigma is", round(sigma_hat, 3))
+```
+
+$$ \hat{\theta} \sim N( \theta, \sigma/ \sqrt{25})$$
+
+Now use the Central Limit Theorem to construct a confidence interval. 
+
+```{r}
+N<- nrow(trump_rubio_fl)
+theta_hat + c(-1,1)*1.96*sigma_hat/sqrt(N)
+paste("The confidence interval for difference between Trump and Rubio is (",
+      round(theta_hat - 1.96*sigma_hat/sqrt(N), 3), ",",
+      round(theta_hat + 1.96*sigma_hat/sqrt(N), 3), ")")
+```
+
+## Problem 3C
+
+Combine these two results to provide the mean and standard deviation of 
+a posterior distribution for $\theta$. 
+
+```{r}
+B <- (sigma_hat^2/N) / (sigma_hat^2/N + tau^2)
+theta_post <- B*mu + (1-B)*(theta_hat)
+sigma_post <- sqrt(1/((N/sigma_hat^2)+(1/tau^2)))
+cat("The mean of the posterior distribution is", round(theta_post, 3), 
+    "and the standard deviation is", round(sigma_post, 3))
+
+```
+
+## Problem 3D
+
+Use the result form Problem 3C to provide your estimate of 
+Trump beating Rubio in Florida.
+
+```{r}
+post_ch <- 1- pnorm(0, mean = theta_post, sd = sqrt(sigma_post))
+paste("Under the posterior distribution, the chance that Trump would beat Rubio in Florida is", round(post_ch, 3))
+
+```
+
+
+## Problem 4
+
+Use the poll data as well as the results from Super Tuesday (March 1st) and other election results that happen before the deadline to make predictions for each remaining primary. 
+
+#### Answer
+I will set my prior based on the result of the elections so far. Trump has won 44 percent of delegates and I will set my SD at 7.
+
+```{r}
+#Prior
+mu_trump <- 44
+tau_trump <- 7
+```
+
+I will now make a table of Trump's primary results so far
+```{r}
+#states with primaries results
+state <- c("IA", "NH", "SC", "NV", "AL", "AK", "AR", "GA", "MA", "MN", 
+           "OK", "TN", "TX", "VT", "VA", "KS", "KY", "LA", "ME")
+#percent of votes for Trump
+actual_Trump <- c(24.3, 35.3, 32.5, 45.9, 43.4, 33.5, 32.8, 38.8, 49.3, 21.3,
+                  28.3, 38.9, 26.7, 32.7, 34.7, 23.3, 35.9, 41.4, 32.6)
+#number of delegates Trump won
+delegates_Trump <- c(7, 11, 50, 14, 36, 11, 16, 40, 22, 8, 
+                     13, 31, 47, 8, 17, 9, 17, 18, 9)
+#combine into dataframe
+primary_Trump <- data.frame(state, actual_Trump, delegates_Trump)
+
+#to use mutate, we need to turn our matrix into a dataframe. we can use mutate to get a column for the actual difference. to use left_join, the class of the state column needs to match. 
+class(primary_Trump$state)
+
+#we can thus change the class to character
+primary_Trump <- primary_Trump %>%
+  mutate(state= as.character(state)) 
+
+#make a table with poll results for just Trump
+results_Trump <- results %>%
+  filter(!is.na(Trump)) %>%
+  select(state, observations, Trump, start_date, end_date, house) %>%
+  left_join(primary_Trump, by="state")
+```
+
+Check for week and house effect
+```{r}
+error_Trump <- results_Trump %>%
+  filter(!is.na(Trump) & !is.na(actual_Trump)) %>%
+  mutate(error = Trump - actual_Trump)
+error_Trump %>%
+  ggplot(aes(start_date, error, col=house)) + geom_point() + theme(legend.position="none") + 
+  labs(x = "Start Date", y = "Error", title = "Error in predicting percent of Trump voters by house and start date")
+
+#examine the histogram of errors
+error_Trump %>%
+  ggplot(aes(error)) + geom_histogram() +
+  labs(x = "Error", y = "Count", title = "Error in predicting percent of Trump voters")
+qqnorm(error_Trump$error)
+qqline(error_Trump$error)
+#errors are centered at 0 but not normally distributed, earlier polls were pessimistic about Trump
+
+#will use data since Jan because it seems like the polls after Jan are more accurate
+
+error_Trump_Jan <- error_Trump %>%
+  filter(start_date > as.Date("2016-01-01"))
+error_Trump_Jan %>%
+  ggplot(aes(start_date, error, col=house)) + geom_point() + theme(legend.position="none") + 
+  labs(x = "Start Date", y = "Error", 
+       title = "Error in predicting percent of Trump voters by house and start date after Jan 1 2016")
+#histogram of errors
+error_Trump_Jan %>%
+  ggplot(aes(error)) + geom_histogram() +
+  labs(x = "Error", y = "Count", title = "Error in predicting percent of Trump voters")
+#qq plots
+qqnorm(error_Trump_Jan$error)
+qqline(error_Trump_Jan$error)
+
+#errors are approximately normally distributed with mean 0 if we only consider results after January 2016
+#I will only use the results after Jan 2016 for the predictions
+```
+
+Make a table of the number of delegates available for each state available in the table
+```{r}
+#list of states in table I have from huffington post right now
+state <- c("MI", "FL", "MS", "IL", "AZ", "WI", "PA", "OH", "NC", "UT", "WV", "NJ", "IA", "NH", "SC", 
+           "NV", "AL", "AK", "AR", "GA", "MA", "MN", "OK", "TN", "TX", "VT", "VA", "KS", "KY", "LA",
+           "ME")
+delegates <- c (59, 99, 40, 69, 58, 42, 17, 66, 72, 40, 34, 51, 30, 23, 50, 30, 50, 28, 40, 76, 42, 38,
+               43, 58, 155, 16, 49, 40, 46, 46, 23)
+add_delegates <- data.frame(state, delegates)
+#to use mutate, we need to turn our matrix into a dataframe. we can use mutate to get a column for the actual difference. to use left_join, the class of the state column needs to match. 
+class(add_delegates$state)
+#we can thus change the class to character
+add_delegates <- add_delegates %>%
+  mutate(state= as.character(state)) 
+#add information to trump table
+results_Trump <- results_Trump %>%
+  left_join(add_delegates, by="state") 
+```
+
+I will now predict the number of delegates for Trump in the remaining states. I will only use the results after Jan 2016 and will only use states that have had at least 4 polls.
+
+```{r}
+results_Trump2<-  results_Trump %>%
+  filter(start_date > as.Date("2016-01-01")) %>%
+  group_by(state) %>%
+  filter(n() > 4) %>%
+  filter(is.na(actual_Trump)) 
+
+unique((results_Trump2)$state)
+```
+
+```{r}
+results_Trump_3 <- results_Trump2%>%
+  mutate(theta_hat_primary = mean(Trump)) %>%
+  mutate(sigma_hat_primary = sd(Trump)/sqrt(n())) %>%
+  mutate(b = sigma_hat_primary^2 / (sigma_hat_primary^2 + tau_trump^2)) %>%
+  mutate(post_theta =  b*mu_trump + (1-b)*(theta_hat_primary)) %>%
+  mutate(post_sigma =  sqrt(1/((1/sigma_hat_primary^2)+(1/tau_trump^2)))) %>%
+  mutate(upper = (post_theta + 1.96*post_sigma),
+           lower = (post_theta - 1.96*post_sigma)) 
+
+final <- results_Trump_3 %>%  
+  select(state, delegates, b:lower) %>%
+  unique
+```
+
+The predicted results for the remaining primaries (for which poll data is available) are:
+```{r}
+final
+```
+
